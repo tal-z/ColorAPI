@@ -1,6 +1,5 @@
-import sqlite3
-
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from tortoise.contrib.fastapi import register_tortoise
 from passlib.hash import bcrypt
@@ -8,7 +7,7 @@ import jwt
 
 from ColorController import ColorController
 
-from models import User, User_Pydantic, UserIn_Pydantic
+from models import User, User_Pydantic, UserIn_Pydantic, Color
 from kmeans import extract_colors
 
 JWT_SECRET = 'mysecret'
@@ -107,14 +106,19 @@ async def read_hsv(hsv_value: str):
     return {"hex_code": color.hex_code, "rgb_value": color.rgb, "hsv_value": color.hsv, "names": color.name}
 
 
-def write_image_dominant_colors(name: str, url: str, num_colors: int):
-    avg_inertia, dominant_colors = extract_colors(image_path=url, k=num_colors)
-    with sqlite3.connect('dominant_colors.db') as con:
-        cur = con.cursor()
-        cur.execute(f"INSERT INTO dominant_colors VALUES ('{url}','{name}',{num_colors}, '{list(dominant_colors)}')")
-
+async def write_image_dominant_colors(name: str, url: str, num_colors: int):
+    avg_inertia, dominant_colors = await run_in_threadpool(lambda: extract_colors(image_path=url, k=num_colors))
+    await run_in_threadpool(lambda:
+        Color.create(name=name, url=url, num_colors=num_colors, dominant_colors=dominant_colors, avg_inertia=avg_inertia)
+    )
 
 @app.post("/extract/{num_colors}/")
 async def extract_from_image(name: str, url: str, num_colors: int, background_tasks: BackgroundTasks, token: str = Depends(oauth2_scheme)):
     background_tasks.add_task(write_image_dominant_colors, name=name, url=url, num_colors=num_colors)
     return {"message": "colors have been extracted"}
+
+
+
+@app.get("/retrieve/{name}/")
+async def retrieve_image_data_by_name(name: str, token: str = Depends(oauth2_scheme)):
+    return {"num_colors": "number of colors goes here..."}
